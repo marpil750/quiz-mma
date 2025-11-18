@@ -1,275 +1,211 @@
-/* Quiz WHOAREYA-like — wpisujesz IMIĘ + NAZWISKO
-   - porównania literowe (zielony/żółty/czerwony)
-   - porównanie cech: organization/country/division
-   - blur image maleje po błędach
-   - 8 prób
-   - daily fighter (ten sam dla wszystkich tego dnia, zapisany w localStorage)
-*/
-
-/* KONFIG */
+/* Game script: Wordle-like WhoAreYa UFC edition */
 const MAX_ATTEMPTS = 8;
-const INITIAL_BLUR = 12; // px
-const BLUR_STEP = Math.ceil(INITIAL_BLUR / MAX_ATTEMPTS); // ile zmniejszamy przy błędzie
-
-/* STAN */
 let fighters = [];
 let target = null;
 let attempts = 0;
-let currentBlur = INITIAL_BLUR;
+let initialBlur = 14;
 
-/* PRZYDATNE SELECTORY */
 const imgEl = document.getElementById('fighter-image');
-const countryEl = document.getElementById('country');
-const divisionEl = document.getElementById('division');
-const orgEl = document.getElementById('organization');
-const attemptsLeftEl = document.getElementById('attempts-left');
-const historyEl = document.getElementById('history');
-const feedbackEl = document.getElementById('result-message');
-const guessInput = document.getElementById('guess-input');
+const inputEl = document.getElementById('guess-input');
+const suggestionsEl = document.getElementById('suggestions');
 const guessBtn = document.getElementById('guess-btn');
+const attemptsEl = document.getElementById('attempts');
+const historyEl = document.getElementById('history');
+const resultEl = document.getElementById('result');
 
-/* NORMALIZACJA (usuwa diakrytyczne znaki do porównań) */
-function normalize(str){
-  return str
-    .normalize('NFD')
-    .replace(/\p{Diacritic}/gu,'')
-    .toLowerCase()
-    .replace(/\s+/g,' ') // multiple spaces -> single
-    .trim();
-}
+// load fighters
+fetch('fighters.json').then(r=>r.json()).then(data=>{
+  fighters = data.filter(f=> (f.organization||'').toLowerCase().includes('ufc')); // only UFC
+  // choose daily fighter
+  target = getDailyFighter(fighters);
+  setupUI();
+}).catch(e=>{ console.error(e); resultEl.textContent='Błąd wczytywania bazy'; });
 
-/* Ładowanie JSON */
-fetch('fighters.json')
-  .then(r => r.json())
-  .then(data => {
-    fighters = data;
-    target = getDailyFighter();
-    initUI();
-  })
-  .catch(err => {
-    feedbackEl.textContent = 'Błąd wczytywania danych: ' + err;
-  });
-
-/* DAILY FIGHTER — ten sam dla wszystkich użytkowników danego dnia */
-function getDailyFighter(){
-  const today = (new Date()).toISOString().slice(0,10);
+function getDailyFighter(list){
+  const today = new Date().toISOString().slice(0,10);
   const savedDate = localStorage.getItem('dailyFighterDate');
-  const saved = localStorage.getItem('dailyFighter');
-  if(savedDate === today && saved){
-    return JSON.parse(saved);
-  } else {
-    const pick = fighters[Math.floor(Math.random()*fighters.length)];
-    localStorage.setItem('dailyFighter', JSON.stringify(pick));
-    localStorage.setItem('dailyFighterDate', today);
-    return pick;
+  if(savedDate === today && localStorage.getItem('dailyFighter')){
+    return JSON.parse(localStorage.getItem('dailyFighter'));
   }
+  const pick = list[Math.floor(Math.random()*list.length)];
+  localStorage.setItem('dailyFighter', JSON.stringify(pick));
+  localStorage.setItem('dailyFighterDate', today);
+  return pick;
 }
 
-/* UI start */
-function initUI(){
-  attempts = 0;
-  currentBlur = INITIAL_BLUR;
-  feedbackEl.textContent = '';
-  historyEl.innerHTML = '';
-  guessInput.value = '';
-  guessInput.disabled = false;
-  guessBtn.disabled = false;
-
-  // ustaw meta (pokazujemy atrybuty tylko jako "pola do porównania" – na początku nie podajemy wyników)
-  countryEl.textContent = 'Kraj: ?';
-  divisionEl.textContent = 'Waga: ?';
-  orgEl.textContent = 'Organizacja: ?';
-
-  // zdjęcie
-  imgEl.src = target.image;
-  imgEl.alt = target.name;
-  imgEl.style.filter = `blur(${currentBlur}px)`;
-
-  updateAttemptsLeft();
+function setupUI(){
+  attempts=0;
+  imgEl.src = target.image || '';
+  imgEl.style.filter = `blur(${initialBlur}px)`;
+  attemptsEl.textContent = `Próby: ${attempts} / ${MAX_ATTEMPTS}`;
+  inputEl.value = '';
+  inputEl.focus();
+  resultEl.textContent = '';
+  suggestionsEl.innerHTML='';
+  historyEl.innerHTML='';
 }
 
-/* Aktualizacja tekstu prób */
-function updateAttemptsLeft(){
-  attemptsLeftEl.textContent = `Próby: ${attempts} / ${MAX_ATTEMPTS}`;
+// autocomplete suggestions
+inputEl.addEventListener('input', ()=>{
+  const q = inputEl.value.trim().toLowerCase();
+  suggestionsEl.innerHTML='';
+  if(!q) return;
+  const matches = fighters.filter(f=> f.name.toLowerCase().startsWith(q)).slice(0,20);
+  for(const m of matches){
+    const div = document.createElement('div');
+    div.className='suggestion';
+    div.textContent = m.name;
+    div.addEventListener('click', ()=>{ selectSuggestion(m.name); });
+    suggestionsEl.appendChild(div);
+  }
+});
+
+function selectSuggestion(name){
+  inputEl.value = name;
+  suggestionsEl.innerHTML='';
+  submitGuess();
 }
 
-/* Główna logika sprawdzenia jednej próby */
-function handleGuess(raw){
-  if(!raw) return;
-  if(attempts >= MAX_ATTEMPTS) return;
+guessBtn.addEventListener('click', submitGuess);
+inputEl.addEventListener('keydown', (e)=>{ if(e.key==='Enter'){ submitGuess(); } });
 
-  const guess = normalize(raw);
-  const targetName = normalize(target.name);
-
-  // 1) Literowe porównanie — Wordle-like dla CAŁEGO wpisu (spacje zachowujemy w wizualizacji)
-  const guessChars = guess.split('');
-  const targetChars = targetName.split('');
-
-  // Przygotuj strukturę oceny
-  let resultTiles = new Array(guessChars.length).fill('red');
-
-  // Do algorytmu Wordle: najpierw zaznacz greens, potem yells (zliczając pozostałe litery)
-  const targetRemaining = [];
-  for(let i=0;i<targetChars.length;i++){
-    if(guessChars[i] && guessChars[i] === targetChars[i]){
-      resultTiles[i] = 'green';
-    } else {
-      targetRemaining.push(targetChars[i]);
-    }
-  }
-  // zaznacz yellow gdzie litera występuje gdzieś indziej (i usuń z targetRemaining)
-  for(let i=0;i<guessChars.length;i++){
-    if(resultTiles[i] === 'green') continue;
-    const idx = targetRemaining.indexOf(guessChars[i]);
-    if(idx !== -1){
-      resultTiles[i] = 'yellow';
-      targetRemaining.splice(idx,1);
-    } else {
-      resultTiles[i] = 'red';
-    }
-  }
-
-  // 2) Cecha: organization / country / division
-  const traitResults = {
-    organization: traitCompare(normalize(target.organization), normalize(rawTrait(target.organization, raw))),
-    country: traitCompare(normalize(target.country), normalize(rawTrait(target.country, raw))),
-    division: divisionCompare(normalize(target.division), normalize(rawTrait(target.division, raw)))
-  };
-
-  // Rysuj wynik w historii
-  renderHistoryRow(raw, guessChars, resultTiles, traitResults);
-
-  // jeśli zgadł dokładnie całe imię+nazwisko (po normalizacji)
+function submitGuess(){
+  const val = inputEl.value.trim();
+  if(!val) return;
+  const chosen = fighters.find(f=> f.name.toLowerCase()===val.toLowerCase());
+  if(!chosen){ resultEl.textContent='Zawodnik nie znaleziony w bazie'; return; }
+  // count attempt
   attempts++;
-  if(guess === targetName){
-    // wygrana
-    feedbackEl.textContent = `Brawo! Trafiłeś — to ${target.name}.`;
-    revealTarget();
+  // compare name letters (wordle-like)
+  renderGuessRow(chosen);
+  // reduce blur slightly on wrong guess
+  if(chosen.name.toLowerCase() === target.name.toLowerCase()){
+    resultEl.textContent = `Brawo! To ${target.name}`;
+    imgEl.style.filter='blur(0px)';
     disableInput();
     return;
   } else {
-    // nie trafione
-    // zmniejsz blur
-    currentBlur = Math.max(0, currentBlur - BLUR_STEP);
-    imgEl.style.filter = `blur(${currentBlur}px)`;
-
-    if(attempts >= MAX_ATTEMPTS){
-      feedbackEl.textContent = `Koniec prób — to był: ${target.name}`;
-      revealTarget();
+    const blurStep = Math.ceil(initialBlur / MAX_ATTEMPTS);
+    const newBlur = Math.max(0, parseInt(imgEl.style.filter.replace(/[^\d]/g,'')) - blurStep);
+    imgEl.style.filter = `blur(${newBlur}px)`;
+    if(attempts>=MAX_ATTEMPTS){
+      resultEl.textContent = `Koniec prób — to był ${target.name}`;
+      imgEl.style.filter='blur(0px)';
       disableInput();
     } else {
-      feedbackEl.textContent = `Źle — prób: ${attempts} z ${MAX_ATTEMPTS}.`;
+      attemptsEl.textContent = `Próby: ${attempts} / ${MAX_ATTEMPTS}`;
     }
   }
-
-  updateAttemptsLeft();
+  inputEl.value='';
+  inputEl.focus();
 }
 
-/* Pomocnicze: pobiera trait z wpisu użytkownika (próbujemy wyciągnąć słowa pasujące do kraj/organizacja/waga)
-   - Uproszczona heurystyka: sprawdzamy czy w surowym wpisie (raw) występują nazwy organizacji/krajów/wag (lista z JSON) */
-function rawTrait(originalTrait, rawInput){
-  // dla prostoty zwracamy rawInput — ale traitCompare porównuje normalizację i sprawdza występowanie słowa.
-  // (tutaj można dodać bardziej zaawansowaną ekstrakcję)
-  return rawInput;
-}
-
-/* Porównanie cechy - jeżeli występuje dokładny match słowa z rawInput -> green.
-   Jeżeli nie, zwracamy red. (Proste i skuteczne.) */
-function traitCompare(targetTraitNorm, rawInputNorm){
-  // Sprawdzimy czy targetTraitNorm występuje w rawInputNorm (np. wpis "conor mcgregor ireland ufc")
-  if(rawInputNorm.includes(targetTraitNorm)) return 'green';
-  // inaczej red
-  return 'red';
-}
-
-/* Porównanie wagi: jeśli dokładny match -> green.
-   Jeśli słowo wagowe występuje (np 'waga lekka' vs 'lekka' lub 'lekko-półśrednia') -> yellow
-*/
-function divisionCompare(targetDivNorm, rawInputNorm){
-  if(rawInputNorm.includes(targetDivNorm)) return 'green';
-
-  // proste grupowanie wag: szukamy podstawowego słowa (musza, kogucia, piórkowa, lekka, półśrednia, średnia, półciężka, ciężka)
-  const groups = ['musza','koguca','piórkowa','pior kowa','lekka','lekkopolsrednia','lekko','półśrednia','polsrednia','średnia','srednia','półciężka','polciezka','ciężka','ciezka'];
-  // ujednolicenie: usuń znaki diakrytyczne
-  const g = targetDivNorm;
-  for(const key of groups){
-    if(g.includes(key)) {
-      // czy wpis użytkownika zawiera któryś z tych kluczowych słów?
-      for(const key2 of groups){
-        if(rawInputNorm.includes(key2)){
-          // jeśli trafił na jakiś, to daj yellow (podobna kategoria)
-          return 'yellow';
-        }
-      }
-    }
-  }
-  return 'red';
-}
-
-/* Rysowanie w historii */
-function renderHistoryRow(rawText, guessChars, resultTiles, traitResults){
+// compare and render row
+function renderGuessRow(chosen){
   const row = document.createElement('div');
-  row.className = 'guess-row';
-
-  // tiles (wyświetlamy literki zgadniętego stringu w oryginalnej formie użytkownika, ale kolorujemy wg normalizacji)
-  const tilesWrap = document.createElement('div');
-  tilesWrap.className = 'tiles';
-
-  for(let i=0;i<guessChars.length;i++){
-    const t = document.createElement('div');
-    t.className = 'tile ' + resultTiles[i];
-    t.textContent = guessChars[i] === ' ' ? ' ' : guessChars[i].toUpperCase();
-    tilesWrap.appendChild(t);
+  // name tiles
+  const nameWrap = document.createElement('div');
+  // show underscores for target name length
+  const targetName = target.name;
+  // letter-by-letter coloring (green if same letter same pos, yellow if exists elsewhere, red otherwise)
+  const guess = chosen.name;
+  const g = guess.toLowerCase();
+  const t = targetName.toLowerCase();
+  // build counts for yellow logic
+  const tCounts = {};
+  for(let i=0;i<t.length;i++){
+    const ch = t[i];
+    if(ch===' ') continue;
+    tCounts[ch] = (tCounts[ch]||0)+1;
   }
-  row.appendChild(tilesWrap);
+  // first pass greens
+  const colors = new Array(g.length).fill('red');
+  for(let i=0;i<g.length;i++){
+    if(g[i]===t[i]){
+      colors[i]='green';
+      tCounts[g[i]] = (tCounts[g[i]]||0)-1;
+    }
+  }
+  // second pass yellows
+  for(let i=0;i<g.length;i++){
+    if(colors[i]==='green') continue;
+    if(tCounts[g[i]]>0){
+      colors[i]='yellow';
+      tCounts[g[i]]--;
+    }
+  }
+  for(let i=0;i<g.length;i++){
+    const span = document.createElement('span');
+    span.className='tile ' + colors[i];
+    span.textContent = g[i].toUpperCase();
+    nameWrap.appendChild(span);
+  }
+  row.appendChild(nameWrap);
 
-  // Badges (traits)
+  // badges: weight, age, nationality
   const badges = document.createElement('div');
-  badges.className = 'badges';
+  badges.style.marginTop='8px';
 
-  const orgBadge = document.createElement('div');
-  orgBadge.className = 'badge ' + (traitResults.organization === 'green' ? 'green' : traitResults.organization === 'yellow' ? 'yellow' : 'red');
-  orgBadge.textContent = `Org: ${target.organization}`;
-  badges.appendChild(orgBadge);
+  // weight comparison: we attempt to map classes to rough order using keywords
+  const wcOrder = ['fly','bantam','feather','light','welter','middle','lightheavy','heavy'];
+  function normalizeWC(s){
+    if(!s) return '';
+    return s.toLowerCase().replace(/[^a-z0-9]/g,'');
+  }
+  const tgtWC = normalizeWC(target.division || '');
+  const chosenWC = normalizeWC(chosen.division || '');
+  let wcBadge = document.createElement('span');
+  wcBadge.className='badge';
+  if(tgtWC && chosenWC && tgtWC===chosenWC){
+    wcBadge.classList.add('match');
+    wcBadge.textContent = 'Waga: ' + chosen.division;
+  } else if(tgtWC && chosenWC){
+    // compare by finding index in wcOrder
+    const ti = wcOrder.findIndex(k=>tgtWC.includes(k));
+    const ci = wcOrder.findIndex(k=>chosenWC.includes(k));
+    if(ti!==-1 && ci!==-1){
+      if(ci>ti){ wcBadge.classList.add('down'); wcBadge.textContent = 'Waga: ' + chosen.division + ' ↓'; }
+      else if(ci<ti){ wcBadge.classList.add('up'); wcBadge.textContent = 'Waga: ' + chosen.division + ' ↑'; }
+      else { wcBadge.classList.add('badge'); wcBadge.textContent = 'Waga: ' + chosen.division; }
+    } else {
+      wcBadge.textContent = 'Waga: ' + chosen.division;
+    }
+  } else {
+    wcBadge.textContent = 'Waga: ' + chosen.division;
+  }
+  badges.appendChild(wcBadge);
 
-  const countryBadge = document.createElement('div');
-  countryBadge.className = 'badge ' + (traitResults.country === 'green' ? 'green' : traitResults.country === 'yellow' ? 'yellow' : 'red');
-  countryBadge.textContent = `Kraj: ${target.country}`;
-  badges.appendChild(countryBadge);
+  // age comparison
+  const ageBadge = document.createElement('span');
+  ageBadge.className='badge';
+  const tgtAge = parseInt(target.age) || null;
+  const chAge = parseInt(chosen.age) || null;
+  if(tgtAge && chAge){
+    if(chAge===tgtAge){ ageBadge.classList.add('match'); ageBadge.textContent = 'Wiek: ' + chAge; }
+    else if(chAge>tgtAge){ ageBadge.classList.add('down'); ageBadge.textContent = 'Wiek: ' + chAge + ' ↓'; }
+    else { ageBadge.classList.add('up'); ageBadge.textContent = 'Wiek: ' + chAge + ' ↑'; }
+  } else {
+    ageBadge.textContent = 'Wiek: ' + (chosen.age || '');
+  }
+  badges.appendChild(ageBadge);
 
-  const divBadge = document.createElement('div');
-  divBadge.className = 'badge ' + (traitResults.division === 'green' ? 'green' : traitResults.division === 'yellow' ? 'yellow' : 'red');
-  divBadge.textContent = `Waga: ${target.division}`;
-  badges.appendChild(divBadge);
+  // nationality (exact match -> green)
+  const natBadge = document.createElement('span');
+  natBadge.className='badge';
+  const tgtNat = (target.nationality||'').toLowerCase();
+  const chNat = (chosen.nationality||'').toLowerCase();
+  if(tgtNat && chNat && tgtNat===chNat){
+    natBadge.classList.add('match'); natBadge.textContent = 'Narodowość: ' + chosen.nationality;
+  } else {
+    natBadge.textContent = 'Narodowość: ' + chosen.nationality;
+  }
+  badges.appendChild(natBadge);
 
   row.appendChild(badges);
   historyEl.prepend(row);
 }
 
-/* Pokazanie pełnego zdjęcia i odsłonięcie atrybutów */
-function revealTarget(){
-  imgEl.style.filter = 'blur(0px)';
-  countryEl.textContent = `Kraj: ${target.country}`;
-  divisionEl.textContent = `Waga: ${target.division}`;
-  orgEl.textContent = `Organizacja: ${target.organization}`;
-}
-
-/* Wyłącz input po zakończeniu */
 function disableInput(){
-  guessInput.disabled = true;
+  inputEl.disabled = true;
   guessBtn.disabled = true;
 }
-
-/* Obsługa guzika */
-guessBtn.addEventListener('click', () => {
-  const val = guessInput.value.trim();
-  if(!val) return;
-  handleGuess(val);
-  guessInput.value = '';
-  guessInput.focus();
-});
-guessInput.addEventListener('keydown', (e) => {
-  if(e.key === 'Enter') {
-    guessBtn.click();
-  }
-});
