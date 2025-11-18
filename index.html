@@ -1,15 +1,45 @@
 <!DOCTYPE html>
 <html lang="pl">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Quiz MMA - Wisielec</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Quiz MMA — WhoAreYa style</title>
 <link rel="stylesheet" href="style.css">
-<script src="script.js" defer></script>
 </head>
 <body>
-  <h1>Codzienny zawodnik MMA</h1>
-  <div id="fighter-container"></div>
+  <main>
+    <h1>Codzienny zawodnik MMA</h1>
+    <div id="game">
+      <div id="left">
+        <div id="fighter-image-wrap">
+          <img id="fighter-image" src="" alt="zdjęcie zawodnika">
+        </div>
+        <div id="meta">
+          <p id="country"></p>
+          <p id="division"></p>
+          <p id="organization"></p>
+        </div>
+      </div>
+
+      <div id="right">
+        <p id="instructions">Wpisz pełne imię i nazwisko (np. "Conor McGregor") — 8 prób.</p>
+
+        <div id="guess-form">
+          <input id="guess-input" type="text" placeholder="Wpisz imię i nazwisko" autocomplete="off">
+          <button id="guess-btn">Sprawdź</button>
+        </div>
+
+        <div id="status">
+          <p id="attempts-left"></p>
+        </div>
+
+        <div id="history"></div>
+
+        <div id="result-message"></div>
+      </div>
+    </div>
+  </main>
+
+<script src="script.js" defer></script>
 </body>
 </html>
-
